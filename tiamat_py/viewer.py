@@ -346,12 +346,26 @@ class TiamatViewer:
 
         root.title("TiamatPy")
         root.geometry("1380x920")
+        self._apply_window_icon()
 
         self._build_ui()
         self._apply_color_scheme()
         self._bind_events()
         self._reset_viewports()
         self._refresh_all()
+
+    def _apply_window_icon(self) -> None:
+        png_path = _resource_root() / "Toolbar_icons" / "exe_logo.png"
+        ico_path = _resource_root() / "Toolbar_icons" / "exe_logo.ico"
+        try:
+            if png_path.exists():
+                icon_image = tk.PhotoImage(file=str(png_path))
+                self.root.iconphoto(True, icon_image)
+                self._window_icon_image = icon_image
+            if IS_WINDOWS and ico_path.exists():
+                self.root.iconbitmap(default=str(ico_path))
+        except tk.TclError:
+            pass
 
     def _build_ui(self) -> None:
         self.main = ttk.Frame(self.root, padding=8)
@@ -562,9 +576,9 @@ class TiamatViewer:
             width=26,
             height=26,
             bg=toolbar_bg,
-            activebackground="#e2e8f0" if IS_WINDOWS else "#d4d4d4",
+            activebackground=toolbar_bg if IS_WINDOWS else "#d4d4d4",
             relief=tk.FLAT,
-            bd=1,
+            bd=0 if IS_WINDOWS else 1,
             highlightthickness=0,
             padx=1,
             pady=1,
@@ -1701,7 +1715,21 @@ class TiamatViewer:
         active_bg = "#dbeafe" if IS_WINDOWS else "#dcdcdc"
         pressed_bg = "#bfdbfe" if IS_WINDOWS else "#dcdcdc"
         outline = hover_outline if hover or active else base_bg
-        slot.configure(highlightbackground=outline, highlightcolor=outline)
+        if IS_WINDOWS:
+            slot_bg = pressed_bg if pressed and str(button.cget("state")) != tk.DISABLED else active_bg if active else base_bg
+            slot.configure(
+                bg=slot_bg,
+                highlightbackground=outline,
+                highlightcolor=outline,
+            )
+            button.configure(
+                relief=tk.FLAT,
+                bg=slot_bg,
+                activebackground=slot_bg,
+                bd=0,
+            )
+            return
+        slot.configure(bg=base_bg, highlightbackground=outline, highlightcolor=outline)
         if pressed and str(button.cget("state")) != tk.DISABLED:
             button.configure(relief=tk.SUNKEN, bg=pressed_bg)
             button.pack_configure(padx=(3, 1), pady=(3, 1))
@@ -2635,6 +2663,9 @@ class TiamatViewer:
         self._refresh_mode_toolbar_buttons()
         self._refresh_native_menu_bar()
         self._update_status()
+        self._refresh_views_only()
+
+    def _refresh_views_only(self) -> None:
         for key in self.viewports:
             self._redraw_view(key)
 
@@ -3228,6 +3259,7 @@ class TiamatViewer:
                 state.selection_box_end = None
                 if state.drag_moved:
                     self._commit_history_snapshot(state.drag_snapshot)
+                    self._refresh_all()
                 else:
                     self._redraw_view(key)
             elif self.selection_mode == "create_base" and not state.drag_moved:
@@ -3257,7 +3289,7 @@ class TiamatViewer:
         scale = state.drag_camera.zoom if state.drag_camera.zoom > 0.0 else max(state.fit_zoom, 1.0)
         translation = _drag_translation_vector(state.mode, state.drag_camera, dx, dy, scale, constrain_axis=constrain_axis)
         _apply_translation_to_project(self.project, state.drag_positions, translation)
-        self._refresh_all()
+        self._refresh_views_only()
 
     def _drag_rotate_selection(self, state: ViewportState, dx: float, dy: float, constrain_axis: bool = False) -> None:
         if not self.project or state.drag_positions is None or state.drag_center is None or state.drag_camera is None:
@@ -3267,7 +3299,7 @@ class TiamatViewer:
         else:
             rotation = _drag_rotation_matrix_planar(state.mode, dx, dy, constrain_axis=constrain_axis)
         _apply_rotation_to_project(self.project, state.drag_positions, state.drag_center, rotation)
-        self._refresh_all()
+        self._refresh_views_only()
 
     def _select_nearest(self, key: str, event: tk.Event) -> None:
         if not self.project:

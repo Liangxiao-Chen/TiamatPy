@@ -15,5 +15,5 @@ or double-click:
 The built application should appear at:
 
 ```powershell
-dist\TiamatPy.exe
+dist\TiamatPy\TiamatPy.exe
 ```
