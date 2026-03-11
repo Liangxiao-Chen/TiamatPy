@@ -4,7 +4,7 @@
 
 What is implemented:
 
-- Tiamat ASCII `.dat` import
+- `.dna`, `.dnajson`, and nucleic-acid `.pdb` loading
 - JSON save/load (`.dnajson`)
 - Strand reconstruction from the base graph
 - Heuristic sequence generation with Watson-Crick pairing across links
@@ -15,15 +15,21 @@ What is implemented:
 
 What is not implemented yet:
 
-- Native `.dna` binary parsing
 - AVI rendering
-- Full constraint editing
 - Exact parity with the original MFC/OpenGL UI
 
-Demo project:
+Demo files:
+
+- `demo/test.dna`
+- `demo/test.dnajson`
+
+The two demo files represent the same structure in native and JSON forms.
+
+Open the demo:
 
 ```bash
-python3 -m tiamat_py gui /Users/wyssuser/Documents/Tiamat_py/demo/demo_double_helix.dnajson
+python3 -m tiamat_py gui demo/test.dna
+python3 -m tiamat_py gui demo/test.dnajson
 ```
 
 Viewer controls:
@@ -39,11 +45,10 @@ Viewer controls:
 Typical commands:
 
 ```bash
-python3 -m tiamat_py inspect /path/to/dna_ascii.dat
-python3 -m tiamat_py convert /path/to/dna_ascii.dat /path/to/project.dnajson
-python3 -m tiamat_py export-sequences /path/to/project.dnajson /path/to/sequences.txt --generate
-python3 -m tiamat_py export-svg /path/to/project.dnajson /path/to/view.svg
+python3 -m tiamat_py gui /path/to/project.dna
 python3 -m tiamat_py gui /path/to/project.dnajson
+python3 -m tiamat_py gui /path/to/project.pdb
+python3 -m tiamat_py export-sequences /path/to/project.dnajson /path/to/sequences.txt --generate
 ```
 
 You can also start the viewer without an input file:
