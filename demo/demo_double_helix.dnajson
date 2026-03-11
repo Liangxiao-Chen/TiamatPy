@@ -1,0 +1,154 @@
+{
+  "bases": [
+    {
+      "across": 12,
+      "down": 2,
+      "index": 1,
+      "nucleotide": "A",
+      "object_id": "demo_001",
+      "strand_id": 1,
+      "up": null,
+      "x": 0.0,
+      "y": 0.0,
+      "z": 0.0
+    },
+    {
+      "across": 11,
+      "down": 3,
+      "index": 2,
+      "nucleotide": "C",
+      "object_id": "demo_002",
+      "strand_id": 1,
+      "up": 1,
+      "x": 1.3,
+      "y": 0.7,
+      "z": 0.8
+    },
+    {
+      "across": 10,
+      "down": 4,
+      "index": 3,
+      "nucleotide": "G",
+      "object_id": "demo_003",
+      "strand_id": 1,
+      "up": 2,
+      "x": 2.6,
+      "y": 1.2,
+      "z": 0.2
+    },
+    {
+      "across": 9,
+      "down": 5,
+      "index": 4,
+      "nucleotide": "T",
+      "object_id": "demo_004",
+      "strand_id": 1,
+      "up": 3,
+      "x": 3.9,
+      "y": 1.0,
+      "z": -0.6
+    },
+    {
+      "across": 8,
+      "down": 6,
+      "index": 5,
+      "nucleotide": "A",
+      "object_id": "demo_005",
+      "strand_id": 1,
+      "up": 4,
+      "x": 5.2,
+      "y": 0.4,
+      "z": -0.9
+    },
+    {
+      "across": 7,
+      "down": null,
+      "index": 6,
+      "nucleotide": "C",
+      "object_id": "demo_006",
+      "strand_id": 1,
+      "up": 5,
+      "x": 6.5,
+      "y": -0.2,
+      "z": -0.3
+    },
+    {
+      "across": 6,
+      "down": 8,
+      "index": 7,
+      "nucleotide": "G",
+      "object_id": "demo_007",
+      "strand_id": 2,
+      "up": null,
+      "x": 6.5,
+      "y": 1.9,
+      "z": 0.3
+    },
+    {
+      "across": 5,
+      "down": 9,
+      "index": 8,
+      "nucleotide": "T",
+      "object_id": "demo_008",
+      "strand_id": 2,
+      "up": 7,
+      "x": 5.2,
+      "y": 2.5,
+      "z": 0.9
+    },
+    {
+      "across": 4,
+      "down": 10,
+      "index": 9,
+      "nucleotide": "A",
+      "object_id": "demo_009",
+      "strand_id": 2,
+      "up": 8,
+      "x": 3.9,
+      "y": 3.0,
+      "z": 0.6
+    },
+    {
+      "across": 3,
+      "down": 11,
+      "index": 10,
+      "nucleotide": "C",
+      "object_id": "demo_010",
+      "strand_id": 2,
+      "up": 9,
+      "x": 2.6,
+      "y": 3.2,
+      "z": -0.2
+    },
+    {
+      "across": 2,
+      "down": 12,
+      "index": 11,
+      "nucleotide": "G",
+      "object_id": "demo_011",
+      "strand_id": 2,
+      "up": 10,
+      "x": 1.3,
+      "y": 2.7,
+      "z": -0.8
+    },
+    {
+      "across": 1,
+      "down": null,
+      "index": 12,
+      "nucleotide": "T",
+      "object_id": "demo_012",
+      "strand_id": 2,
+      "up": 11,
+      "x": 0.0,
+      "y": 2.1,
+      "z": -0.4
+    }
+  ],
+  "format": "tiamat_py_v1",
+  "metadata": {
+    "description": "Small two-strand demo project for the TiamatPy GUI.",
+    "name": "Demo Double Helix",
+    "source_format": "dnajson"
+  }
+}

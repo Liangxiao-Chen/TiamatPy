@@ -1,0 +1,4 @@
+.DS_Store
+.tiamat_py_viewer_state.json
+__pycache__/
+*.pyc
