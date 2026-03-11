@@ -4,12 +4,20 @@ import argparse
 from pathlib import Path
 import sys
 
-from .io_ascii import load_ascii_dat
-from .io_dna import load_dna_project
-from .io_json import load_json_project, save_json_project
-from .io_pdb import load_pdb_sugar_center_project
-from .ncbi import fetch_fasta, search_genomes
-from .viewer import Camera, launch, load_project, render_svg
+try:
+    from .io_ascii import load_ascii_dat
+    from .io_dna import load_dna_project
+    from .io_json import load_json_project, save_json_project
+    from .io_pdb import load_pdb_sugar_center_project
+    from .ncbi import fetch_fasta, search_genomes
+    from .viewer import Camera, launch, load_project, render_svg
+except ImportError:
+    from tiamat_py.io_ascii import load_ascii_dat
+    from tiamat_py.io_dna import load_dna_project
+    from tiamat_py.io_json import load_json_project, save_json_project
+    from tiamat_py.io_pdb import load_pdb_sugar_center_project
+    from tiamat_py.ncbi import fetch_fasta, search_genomes
+    from tiamat_py.viewer import Camera, launch, load_project, render_svg
 
 
 def build_parser() -> argparse.ArgumentParser:
