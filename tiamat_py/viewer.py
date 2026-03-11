@@ -309,9 +309,12 @@ class TiamatViewer:
         self._active_submenu_widgets: tuple[tk.Widget, ...] | None = None
         self.toolbar_icons: dict[str, tk.PhotoImage] = {}
         self.toolbar_disabled_icons: dict[str, tk.PhotoImage] = {}
-        self.toolbar_buttons: dict[str, tk.Button] = {}
+        self.toolbar_buttons: dict[str, tk.Widget] = {}
         self.toolbar_slots: dict[str, tk.Frame] = {}
+        self.toolbar_commands: dict[str, object] = {}
+        self.toolbar_enabled: dict[str, bool] = {}
         self.toolbar_hint: tk.Label | None = None
+        self._native_menu_signature: tuple | None = None
         self._sash_thickness = 8
         self._col_ratio = 0.5
         self._row_ratio = 0.5
@@ -443,13 +446,19 @@ class TiamatViewer:
     def _refresh_native_menu_bar(self) -> None:
         if not IS_WINDOWS or not self.menu_factories:
             return
+        menu_names = ("File", "Edit", "Display", "Mode", "Constraints", "View", "Help")
+        menu_entries = [(name, self.menu_factories[name]()) for name in menu_names]
+        signature = tuple((name, _menu_entries_signature(entries)) for name, entries in menu_entries)
+        if signature == self._native_menu_signature and self.native_menu_bar is not None:
+            return
         self.native_menu_vars = []
         menu_bar = tk.Menu(self.root, tearoff=False)
-        for name in ("File", "Edit", "Display", "Mode", "Constraints", "View", "Help"):
+        for name, entries in menu_entries:
             submenu = tk.Menu(menu_bar, tearoff=False)
-            self._populate_native_menu(submenu, self.menu_factories[name]())
+            self._populate_native_menu(submenu, entries)
             menu_bar.add_cascade(label=name, menu=submenu)
         self.native_menu_bar = menu_bar
+        self._native_menu_signature = signature
         self.root.configure(menu=menu_bar)
 
     def _populate_native_menu(self, menu: tk.Menu, entries: list[tuple]) -> None:
@@ -568,22 +577,37 @@ class TiamatViewer:
         )
         slot.pack(side=tk.LEFT, padx=1, pady=1)
         slot.pack_propagate(False)
-        button = tk.Button(
-            slot,
-            image=image,
-            command=command,
-            state=initial_state,
-            width=26,
-            height=26,
-            bg=toolbar_bg,
-            activebackground=toolbar_bg if IS_WINDOWS else "#d4d4d4",
-            relief=tk.FLAT,
-            bd=0 if IS_WINDOWS else 1,
-            highlightthickness=0,
-            padx=1,
-            pady=1,
-        )
-        button.pack(padx=2, pady=2)
+        if IS_WINDOWS:
+            button = tk.Label(
+                slot,
+                image=image,
+                width=26,
+                height=26,
+                bg=toolbar_bg,
+                bd=0,
+                highlightthickness=0,
+                padx=1,
+                pady=1,
+                takefocus=0,
+            )
+            button.pack(padx=2, pady=2)
+        else:
+            button = tk.Button(
+                slot,
+                image=image,
+                command=command,
+                state=initial_state,
+                width=26,
+                height=26,
+                bg=toolbar_bg,
+                activebackground="#d4d4d4",
+                relief=tk.FLAT,
+                bd=1,
+                highlightthickness=0,
+                padx=1,
+                pady=1,
+            )
+            button.pack(padx=2, pady=2)
         hint_text = TOOLBAR_HINTS.get(icon_name, icon_name.replace("_", " ").title())
         for widget in (slot, button):
             widget.bind("<Enter>", lambda _event, name=icon_name, text=hint_text: self._handle_toolbar_enter(name, text))
@@ -592,6 +616,7 @@ class TiamatViewer:
             widget.bind("<ButtonRelease-1>", lambda _event, name=icon_name: self._handle_toolbar_release(name))
         self.toolbar_buttons[icon_name] = button
         self.toolbar_slots[icon_name] = slot
+        self.toolbar_commands[icon_name] = command
         self._set_toolbar_button_enabled(icon_name, initial_state != "disabled")
 
     def _add_toolbar_separator(self) -> None:
@@ -634,6 +659,13 @@ class TiamatViewer:
     def _set_toolbar_button_enabled(self, icon_name: str, enabled: bool) -> None:
         button = self.toolbar_buttons.get(icon_name)
         if button is None:
+            return
+        self.toolbar_enabled[icon_name] = enabled
+        if IS_WINDOWS:
+            button.configure(
+                image=self._load_toolbar_icon(icon_name) if enabled else self._load_disabled_toolbar_icon(icon_name),
+                cursor="hand2" if enabled else "",
+            )
             return
         button.configure(
             state=tk.NORMAL if enabled else tk.DISABLED,
@@ -1692,10 +1724,18 @@ class TiamatViewer:
         self._hide_toolbar_hint()
 
     def _handle_toolbar_press(self, icon_name: str) -> None:
+        if not self.toolbar_enabled.get(icon_name, False):
+            return
         self._hide_toolbar_hint()
         self._set_toolbar_button_visual(icon_name, hover=True, pressed=True)
 
     def _handle_toolbar_release(self, icon_name: str) -> None:
+        if not self.toolbar_enabled.get(icon_name, False):
+            return
+        if IS_WINDOWS:
+            command = self.toolbar_commands.get(icon_name)
+            if callable(command):
+                command()
         self._set_toolbar_button_visual(icon_name, hover=True)
 
     def _set_toolbar_button_visual(self, icon_name: str, hover: bool, pressed: bool = False) -> None:
@@ -1716,7 +1756,8 @@ class TiamatViewer:
         pressed_bg = "#bfdbfe" if IS_WINDOWS else "#dcdcdc"
         outline = hover_outline if hover or active else base_bg
         if IS_WINDOWS:
-            slot_bg = pressed_bg if pressed and str(button.cget("state")) != tk.DISABLED else active_bg if active else base_bg
+            enabled = self.toolbar_enabled.get(icon_name, False)
+            slot_bg = pressed_bg if pressed and enabled else active_bg if active else base_bg
             slot.configure(
                 bg=slot_bg,
                 highlightbackground=outline,
@@ -2559,29 +2600,10 @@ class TiamatViewer:
             state.canvas.bind("<Button-4>", lambda _event, view_key=key: self._on_scroll_zoom(view_key, 0.1))
             state.canvas.bind("<Button-5>", lambda _event, view_key=key: self._on_scroll_zoom(view_key, -0.1))
 
-    def _hover_view(self, key: str, event: tk.Event) -> None:
-        if self.selection_mode != "create_base" or self.pending_free_strand_start is None:
-            return
-        previous_view = self.pending_free_strand_hover_view
-        self.pending_free_strand_hover_view = key
-        self.pending_free_strand_hover_canvas = (event.x, event.y)
-        if previous_view is not None and previous_view != key:
-            self._redraw_view(previous_view)
-        self._redraw_view(key)
-
-    def _leave_view(self, key: str) -> None:
-        if self.pending_free_strand_hover_view != key:
-            return
-        self.pending_free_strand_hover_view = None
-        self.pending_free_strand_hover_canvas = None
-        self._redraw_view(key)
-
-    def _clear_pending_free_strand(self) -> None:
-        self.pending_free_strand_start = None
-        self.pending_free_strand_hover_view = None
-        self.pending_free_strand_hover_canvas = None
-
         self.root.bind_all("<KeyPress>", self._on_keypress, add="+")
+        self.root.bind_all("<Delete>", self._delete_key_event, add="+")
+        self.root.bind_all("<BackSpace>", self._delete_key_event, add="+")
+        self.root.bind_all("<KP_Delete>", self._delete_key_event, add="+")
         self.root.bind_all("<Command-a>", self._select_all_event, add="+")
         self.root.bind_all("<Control-a>", self._select_all_event, add="+")
         self.root.bind_all("<Command-n>", self._new_project_event, add="+")
@@ -2604,6 +2626,28 @@ class TiamatViewer:
         self.root.bind_all("<Control-Z>", self._redo_event, add="+")
         self.root.bind_all("<ButtonPress-1>", self._close_menu_on_click, add="+")
         self.root.bind_all("<Escape>", self._close_menu_on_escape, add="+")
+
+    def _hover_view(self, key: str, event: tk.Event) -> None:
+        if self.selection_mode != "create_base" or self.pending_free_strand_start is None:
+            return
+        previous_view = self.pending_free_strand_hover_view
+        self.pending_free_strand_hover_view = key
+        self.pending_free_strand_hover_canvas = (event.x, event.y)
+        if previous_view is not None and previous_view != key:
+            self._redraw_view(previous_view)
+        self._redraw_view(key)
+
+    def _leave_view(self, key: str) -> None:
+        if self.pending_free_strand_hover_view != key:
+            return
+        self.pending_free_strand_hover_view = None
+        self.pending_free_strand_hover_canvas = None
+        self._redraw_view(key)
+
+    def _clear_pending_free_strand(self) -> None:
+        self.pending_free_strand_start = None
+        self.pending_free_strand_hover_view = None
+        self.pending_free_strand_hover_canvas = None
 
     def _layout_viewports(self) -> None:
         width = max(1, self.viewport_host.winfo_width())
@@ -3476,6 +3520,8 @@ class TiamatViewer:
         return state.drag_button is not None
 
     def _on_keypress(self, event: tk.Event) -> str | None:
+        if _is_text_input_widget(event.widget):
+            return None
         mode = MODE_KEYS.get(event.keysym)
         if mode is not None and not _has_shortcut_modifier(event.state):
             self._set_selection_mode(mode)
@@ -3498,6 +3544,16 @@ class TiamatViewer:
             self._delete_selection()
             return "break"
         return None
+
+    def _delete_key_event(self, event: tk.Event) -> str | None:
+        if _is_text_input_widget(event.widget):
+            return None
+        if _has_shortcut_modifier(event.state):
+            return None
+        if not self.project or not self.selected_indices:
+            return None
+        self._delete_selection()
+        return "break"
 
     def _set_selection_nucleotide(self, nucleotide: str) -> None:
         if not self.project:
@@ -5599,6 +5655,23 @@ def _menu_toggle_mark(enabled: bool) -> str:
     return "\u2713" if enabled else ""
 
 
+def _menu_entries_signature(entries: list[tuple]) -> tuple:
+    signature: list[tuple] = []
+    for entry in entries:
+        kind = entry[0]
+        if kind == "separator":
+            signature.append(("separator",))
+        elif kind == "command":
+            signature.append(("command", entry[1], entry[3] or ""))
+        elif kind == "disabled":
+            signature.append(("disabled", entry[1], entry[2] if len(entry) > 2 else ""))
+        elif kind == "toggle":
+            signature.append(("toggle", entry[1], bool(entry[2])))
+        elif kind == "submenu":
+            signature.append(("submenu", entry[1], _menu_entries_signature(entry[2])))
+    return tuple(signature)
+
+
 def _disabled_toolbar_icon(image: tk.PhotoImage) -> tk.PhotoImage:
     disabled = tk.PhotoImage(width=image.width(), height=image.height())
     for y in range(image.height()):
@@ -5817,6 +5890,10 @@ def _has_shortcut_modifier(state: int) -> bool:
 
 def _has_shift_modifier(state: int) -> bool:
     return bool(state & 0x0001)
+
+
+def _is_text_input_widget(widget: object) -> bool:
+    return isinstance(widget, (tk.Entry, tk.Text, ttk.Entry, ttk.Combobox, ttk.Spinbox))
 
 
 def _selected_edge_sets(
