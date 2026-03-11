@@ -199,7 +199,7 @@ MAX_HISTORY_STEPS = 50
 CLIPBOARD_RENDER_MAX_DIMENSION = 2400.0
 ROTATE_DRAG_BUTTON = 3 if sys.platform == "darwin" else 2
 PAN_DRAG_BUTTON = 2 if sys.platform == "darwin" else 3
-VIEWER_STATE_PATH = Path(__file__).resolve().parent.parent / ".tiamat_py_viewer_state.json"
+VIEWER_STATE_PATH = Path.home() / ".tiamat_py_viewer_state.json"
 OPENABLE_SUFFIXES = {".dna", ".json", ".dnajson", ".pdb"}
 
 
@@ -243,6 +243,13 @@ class FreeStrandEndpoint:
     base_index: int | None = None
     terminal_roles: frozenset[str] = frozenset()
     molecule: str | None = None
+
+
+def _resource_root() -> Path:
+    bundle_root = getattr(sys, "_MEIPASS", None)
+    if bundle_root:
+        return Path(bundle_root)
+    return Path(__file__).resolve().parent.parent
 
 
 def _mark_viewport_for_fit(state: ViewportState, recenter: bool = False) -> None:
@@ -500,7 +507,7 @@ class TiamatViewer:
     def _load_toolbar_icon(self, icon_name: str) -> tk.PhotoImage:
         if icon_name in self.toolbar_icons:
             return self.toolbar_icons[icon_name]
-        icon_path = Path("/Users/wyssuser/Documents/Tiamat_py/Toolbar_icons") / f"{icon_name}.png"
+        icon_path = _resource_root() / "Toolbar_icons" / f"{icon_name}.png"
         if icon_path.exists():
             image = tk.PhotoImage(file=str(icon_path))
             max_dimension = max(image.width(), image.height(), 1)
