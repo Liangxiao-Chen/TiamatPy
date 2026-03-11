@@ -5,7 +5,7 @@
 from pathlib import Path
 
 
-project_root = Path(__file__).resolve().parent
+project_root = Path(globals().get("SPECPATH", ".")).resolve()
 
 datas = [
     (str(project_root / "Toolbar_icons"), "Toolbar_icons"),
