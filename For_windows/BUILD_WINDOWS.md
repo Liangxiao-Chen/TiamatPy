@@ -17,3 +17,5 @@ The built application should appear at:
 ```powershell
 dist\TiamatPy\TiamatPy.exe
 ```
+
+For distribution, share the whole `dist\TiamatPy\` folder, not only `TiamatPy.exe`.

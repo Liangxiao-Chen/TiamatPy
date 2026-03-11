@@ -82,6 +82,32 @@ or
 py -m tiamat_py
 ```
 
+### Windows `.exe`
+
+If you want a double-clickable Windows build, use the self-contained build folder:
+
+```powershell
+cd For_windows
+py -m PyInstaller --clean TiamatPy.spec
+```
+
+or double-click:
+
+- `For_windows\build_exe.bat`
+
+The packaged application will be created at:
+
+```powershell
+For_windows\dist\TiamatPy\TiamatPy.exe
+```
+
+To share it with other Windows users:
+
+- send the whole `For_windows\dist\TiamatPy\` folder
+- do not send only `TiamatPy.exe`
+- the other user can run `TiamatPy.exe` by double-clicking it
+- Python is not required on the target Windows machine
+
 What is implemented:
 
 - `.dna`, `.dnajson`, and nucleic-acid `.pdb` loading
@@ -117,6 +143,12 @@ On Windows:
 ```powershell
 python -m tiamat_py gui demo\test.dna
 python -m tiamat_py gui demo\test.dnajson
+```
+
+If you built the packaged Windows app:
+
+```powershell
+For_windows\dist\TiamatPy\TiamatPy.exe
 ```
 
 Viewer controls:
