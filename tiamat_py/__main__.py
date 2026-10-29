@@ -8,6 +8,7 @@ try:
     from .io_ascii import load_ascii_dat
     from .io_dna import load_dna_project
     from .io_json import load_json_project, save_json_project
+    from .io_oxdna import export_oxdna_files
     from .io_pdb import load_pdb_sugar_center_project
     from .ncbi import fetch_fasta, search_genomes
     from .viewer import Camera, launch, load_project, render_svg
@@ -15,6 +16,7 @@ except ImportError:
     from tiamat_py.io_ascii import load_ascii_dat
     from tiamat_py.io_dna import load_dna_project
     from tiamat_py.io_json import load_json_project, save_json_project
+    from tiamat_py.io_oxdna import export_oxdna_files
     from tiamat_py.io_pdb import load_pdb_sugar_center_project
     from tiamat_py.ncbi import fetch_fasta, search_genomes
     from tiamat_py.viewer import Camera, launch, load_project, render_svg
@@ -38,6 +40,15 @@ def build_parser() -> argparse.ArgumentParser:
     export.add_argument("input", help=".dna, .dnajson, or .pdb file")
     export.add_argument("output", help="output .txt file")
     export.add_argument("--generate", action="store_true", help="generate sequences before export")
+
+    oxdna = subparsers.add_parser("export-oxdna", help="write oxDNA topology/configuration files")
+    oxdna.add_argument("input", help=".dna, .dnajson, or .pdb file")
+    oxdna.add_argument("output", help="output basename, .top path, or .oxdna path")
+    oxdna.add_argument(
+        "--default-base",
+        choices=("A", "C", "G", "T", "U", "R"),
+        help="fallback base for undefined nucleotides; R assigns deterministic random bases",
+    )
 
     svg = subparsers.add_parser("export-svg", help="render a static SVG snapshot")
     svg.add_argument("input", help=".dna, .dnajson, or .pdb file")
@@ -90,6 +101,17 @@ def main(argv: list[str] | None = None) -> int:
             project.generate_sequences()
         Path(args.output).write_text(project.export_sequences_text(), encoding="utf-8")
         print(args.output)
+        return 0
+
+    if args.command == "export-oxdna":
+        project = load_project(args.input)
+        topology_path, configuration_path = export_oxdna_files(
+            project,
+            args.output,
+            default_base=args.default_base,
+        )
+        print(topology_path)
+        print(configuration_path)
         return 0
 
     if args.command == "export-svg":

@@ -113,7 +113,9 @@ What is implemented:
 - `.dna`, `.dnajson`, and nucleic-acid `.pdb` loading
 - JSON save/load (`.dnajson`)
 - Strand reconstruction from the base graph
-- Heuristic sequence generation with Watson-Crick pairing across links
+- Randomized, constraint-checked sequence generation with complementary pairs
+- oxDNA2 / oxRNA export with orthonormal orientations and backbone-preserving geometry
+- Unsaved-change prompts and failure-safe JSON saving
 - Sequence export as FASTA-like text
 - Static SVG rendering
 - A four-panel Tk viewer with XY/YZ/XZ/3D views, zoom, pan, rotation in 3D, selection, base editing, and export actions
@@ -154,12 +156,14 @@ For_windows\dist\TiamatPy\TiamatPy.exe
 Viewer controls:
 
 - `Command+A` or `Ctrl+A`: select all bases
-- Left-drag in `3D`: rotate
+- Middle-drag in `3D`: rotate the camera
+- Left click/drag: the selected Mode (selection, move, rotate, or creation)
 - Right-drag in any view: pan
 - Mouse wheel in any view: zoom
 - Click: select nearest base
 - `A` / `C` / `G` / `T`: set selected bases
-- `Delete` / `Backspace`: clear selected bases
+- `Delete` / `Backspace`: delete selected bases without ligating their neighbors
+- `Command+Z` / `Ctrl+Z`: undo; add `Shift` to redo
 
 Typical commands:
 
@@ -168,6 +172,7 @@ python3 -m tiamat_py gui /path/to/project.dna
 python3 -m tiamat_py gui /path/to/project.dnajson
 python3 -m tiamat_py gui /path/to/project.pdb
 python3 -m tiamat_py export-sequences /path/to/project.dnajson /path/to/sequences.txt --generate
+python3 -m tiamat_py export-oxdna /path/to/project.dnajson /path/to/simulation
 ```
 
 On Windows, use `python` or `py` and Windows-style paths, for example:
@@ -183,3 +188,29 @@ You can also start the viewer without an input file:
 ```bash
 python3 -m tiamat_py
 ```
+
+## Validation and Limitations
+
+The `.dna` importer now decodes schema-5 archive references directly. It does not
+search for adjacent JSON files or infer strand connections from distance.
+Unsupported archives are rejected instead of silently guessed.
+
+PDB import uses the first model, one occupancy-selected alternate conformer per
+residue, and pentose centers in **nm**. Pairing requires base-plane geometry and
+appropriate atomic contacts, not just complementary sequences. Modified residues
+and ambiguous/missing-atom pairs may remain unassigned.
+
+For DNA simulations, use **`interaction_type = DNA2`**, not DNA1. RNA export uses
+`RNA`. Export preserves the drawn backbone positions; it is an approximate
+initial configuration and requires inspection and relaxation before production
+simulation. Mixed DNA/RNA export is not supported. See [validation details](docs/validation.md).
+
+Run the portable regression suite from this folder:
+
+```bash
+python3 -m unittest discover -s tests -v
+```
+
+On Windows, use `py` instead of `python3`. Optional external structure tests are
+skipped when unavailable; the bundled demo and synthetic regression cases always
+run. `TIAMAT_SAMPLE_DIR` can point to an additional local fixture collection.

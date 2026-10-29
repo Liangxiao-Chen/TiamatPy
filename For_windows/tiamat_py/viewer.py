@@ -12,6 +12,7 @@ from tkinter import colorchooser, filedialog, messagebox, ttk
 
 from .io_dna import load_dna_project
 from .io_json import load_json_project, save_json_project
+from .io_oxdna import export_oxdna_files, resolve_oxdna_output_paths
 from .io_pdb import load_pdb_sugar_center_project
 from .model import BASE_COLORS, Base, TiamatProject, basepair_state
 
@@ -232,6 +233,7 @@ class ViewportState:
     drag_center: tuple[float, float, float] | None = None
     drag_projected_center: tuple[float, float] | None = None
     drag_snapshot: dict[str, object] | None = None
+    drag_frames: dict | None = None
     selection_box_start: tuple[int, int] | None = None
     selection_box_end: tuple[int, int] | None = None
     needs_fit: bool = True
@@ -339,8 +341,11 @@ class TiamatViewer:
         self.show_strand_labels = True
         self.show_sticky_end = True
         self.show_grid = True
-        self.constraints_values = _default_constraints_values()
-        self.custom_constraints_values = _blank_custom_constraints_values()
+        self.constraints_values = _project_constraints(project) if project else _default_constraints_values()
+        self.custom_constraints_values = _project_custom_constraints(project) if project else _blank_custom_constraints_values()
+        source_path = project.metadata.get("source_path") if project else None
+        self.document_path = Path(str(source_path)).resolve() if source_path else None
+        self._saved_document = self._document_content()
         self.recent_files = self._load_recent_files()
         self.undo_stack: list[dict[str, object]] = []
         self.redo_stack: list[dict[str, object]] = []
@@ -349,6 +354,9 @@ class TiamatViewer:
 
         root.title("TiamatPy")
         root.geometry("1380x920")
+        root.protocol("WM_DELETE_WINDOW", self._close_window)
+        if sys.platform == "darwin":
+            root.createcommand("tk::mac::Quit", self._close_window)
         self._apply_window_icon()
 
         self._build_ui()
@@ -710,6 +718,7 @@ class TiamatViewer:
                     ("separator",),
                     ("command", "Render...", self.render_project, None),
                     ("command", "Export Sequences...", self.export_sequences, None),
+                    ("command", "Export oxDNA...", self.export_oxdna, None),
                 ]
             )
         else:
@@ -720,6 +729,7 @@ class TiamatViewer:
                     ("separator",),
                     ("disabled", "Render..."),
                     ("disabled", "Export Sequences..."),
+                    ("disabled", "Export oxDNA..."),
                 ]
             )
         recent_entries = self._create_recent_file_menu_entries()
@@ -729,7 +739,7 @@ class TiamatViewer:
         entries.extend(
             [
                 ("separator",),
-                ("command", "Exit", self.root.destroy, None),
+                ("command", "Exit", self._close_window, None),
             ]
         )
         return entries
@@ -2366,9 +2376,14 @@ class TiamatViewer:
 
     def _open_project_path(self, path: str | Path) -> None:
         file_path = Path(path)
-        self.project = load_project(file_path)
+        if not self._confirm_discard_changes():
+            return
+        loaded = load_project(file_path)
+        self.project = loaded
+        self.document_path = file_path.resolve()
         self.constraints_values = _project_constraints(self.project)
         self.custom_constraints_values = _project_custom_constraints(self.project)
+        self._saved_document = self._document_content()
         self._remember_recent_file(file_path)
         self.selected_indices.clear()
         self.primary_selected = None
@@ -2376,6 +2391,10 @@ class TiamatViewer:
         self._clear_history()
         self._reset_viewports()
         self._refresh_all()
+
+        warnings = self.project.metadata.get("import_warnings", [])
+        if warnings:
+            messagebox.showwarning("Import notes", "\n\n".join(warnings), parent=self.root)
 
     def _open_recent_file(self, path: str) -> None:
         try:
@@ -2386,26 +2405,52 @@ class TiamatViewer:
             messagebox.showerror("Open failed", str(exc))
 
     def _project_save_path(self) -> Path | None:
-        if not self.project:
+        if not self.project or self.document_path is None:
             return None
-        source_path = self.project.metadata.get("source_path")
-        if not source_path:
-            return None
-        path = Path(str(source_path))
+        path = self.document_path
         if path.suffix.lower() not in {".json", ".dnajson"}:
             return None
         return path
 
-    def _write_project_json(self, path: str | Path) -> None:
+    def _document_content(self) -> str:
+        data = self.project.to_dict() if self.project is not None else None
+        if data is not None:
+            data["metadata"] = dict(data["metadata"])
+            for key in ("source_path", "source_format"):
+                data["metadata"].pop(key, None)
+            data["metadata"]["constraints"] = _copy_constraints_values(self.constraints_values)
+            data["metadata"]["custom_constraints"] = _copy_constraints_values(self.custom_constraints_values)
+        return json.dumps(data, sort_keys=True)
+
+    def _confirm_discard_changes(self) -> bool:
+        if self._document_content() == self._saved_document:
+            return True
+        choice = messagebox.askyesnocancel("Unsaved changes", "Save changes before continuing?", parent=self.root)
+        if choice is None:
+            return False
+        return self.save_project() if choice else True
+
+    def _close_window(self) -> None:
+        if self._confirm_discard_changes():
+            self.root.destroy()
+
+    def _write_project_json(self, path: str | Path) -> bool:
         if not self.project:
-            return
+            return False
         self.project.metadata["constraints"] = _copy_constraints_values(self.constraints_values)
         self.project.metadata["custom_constraints"] = _copy_constraints_values(self.custom_constraints_values)
-        save_json_project(self.project, path)
-        self.project.metadata["source_path"] = str(Path(path))
+        try:
+            save_json_project(self.project, path)
+        except (OSError, ValueError, TypeError) as exc:
+            messagebox.showerror("Save failed", str(exc), parent=self.root)
+            return False
+        self.document_path = Path(path).resolve()
+        self.project.metadata["source_path"] = str(self.document_path)
         self.project.metadata["source_format"] = "dnajson"
+        self._saved_document = self._document_content()
         self._remember_recent_file(path)
         self._refresh_all()
+        return True
 
     def _build_menu_popup(self, entries: list[tuple], is_submenu: bool) -> tk.Frame:
         popup = tk.Frame(
@@ -3245,6 +3290,8 @@ class TiamatViewer:
                 for index in self.selected_indices
             }
             state.drag_center = _selection_center(self.project, self.selected_indices)
+            state.drag_frames = {index: (self.project.bases[index].plane_u, self.project.bases[index].plane_v)
+                                 for index in self.selected_indices}
             state.drag_projected_center = _projected_selection_center(state.projected, self.selected_indices)
 
     def _drag_view(self, key: str, button: int, event: tk.Event) -> None:
@@ -3326,6 +3373,7 @@ class TiamatViewer:
         state.drag_center = None
         state.drag_projected_center = None
         state.drag_snapshot = None
+        state.drag_frames = None
 
     def _drag_move_selection(self, state: ViewportState, dx: float, dy: float, constrain_axis: bool = False) -> None:
         if not self.project or state.drag_camera is None or state.drag_positions is None:
@@ -3342,7 +3390,8 @@ class TiamatViewer:
             rotation = _drag_rotation_matrix_3d(state.drag_camera, dx, dy, constrain_axis=constrain_axis)
         else:
             rotation = _drag_rotation_matrix_planar(state.mode, dx, dy, constrain_axis=constrain_axis)
-        _apply_rotation_to_project(self.project, state.drag_positions, state.drag_center, rotation)
+        _apply_rotation_to_project(self.project, state.drag_positions, state.drag_center, rotation,
+                                   original_frames=state.drag_frames)
         self._refresh_views_only()
 
     def _select_nearest(self, key: str, event: tk.Event) -> None:
@@ -3559,6 +3608,10 @@ class TiamatViewer:
         if not self.project:
             return
         selected = set(self.selected_indices)
+        invalid = [index for index in selected if nucleotide not in _allowed_sequence_bases(self.project.bases[index].molecule)]
+        if invalid:
+            messagebox.showerror("Invalid base", f"{nucleotide} is not valid for the molecule type of base {invalid[0]}.", parent=self.root)
+            return
         for index in selected:
             self.project.set_nucleotide(index, nucleotide)
 
@@ -3574,9 +3627,13 @@ class TiamatViewer:
         return "break"
 
     def _new_project(self) -> None:
+        if not self._confirm_discard_changes():
+            return
         self.project = None
+        self.document_path = None
         self.constraints_values = _default_constraints_values()
         self.custom_constraints_values = _blank_custom_constraints_values()
+        self._saved_document = self._document_content()
         self.selected_indices.clear()
         self.primary_selected = None
         self._clear_pending_free_strand()
@@ -3647,26 +3704,25 @@ class TiamatViewer:
         except Exception as exc:
             messagebox.showerror("Open failed", str(exc))
 
-    def save_project(self) -> None:
+    def save_project(self) -> bool:
         if not self.project:
-            return
+            return False
         current_path = self._project_save_path()
         if current_path is None:
-            self.save_json()
-            return
-        self._write_project_json(current_path)
+            return self.save_json()
+        return self._write_project_json(current_path)
 
-    def save_json(self) -> None:
+    def save_json(self) -> bool:
         if not self.project:
-            return
+            return False
         path = filedialog.asksaveasfilename(
             title="Save As",
             defaultextension=".dnajson",
             filetypes=[("Tiamat JSON", "*.dnajson"), ("JSON", "*.json")],
         )
         if not path:
-            return
-        self._write_project_json(path)
+            return False
+        return self._write_project_json(path)
 
     def export_sequences(self) -> None:
         if not self.project:
@@ -3679,6 +3735,34 @@ class TiamatViewer:
         if not path:
             return
         Path(path).write_text(self.project.export_sequences_text(), encoding="utf-8")
+
+    def export_oxdna(self) -> None:
+        if not self.project:
+            return
+        source_path = Path(str(self.project.metadata.get("source_path", "project")))
+        initial_name = source_path.stem or "project"
+        path = filedialog.asksaveasfilename(
+            title="Export oxDNA",
+            initialfile=f"{initial_name}.top",
+            defaultextension=".top",
+            filetypes=[("oxDNA topology", "*.top"), ("oxDNA configuration", "*.oxdna")],
+        )
+        if not path:
+            return
+        try:
+            topology_path, configuration_path = export_oxdna_files(self.project, path)
+        except Exception as exc:
+            messagebox.showerror("Export oxDNA", str(exc), parent=self.root)
+            return
+        top_path, conf_path = resolve_oxdna_output_paths(path)
+        messagebox.showinfo(
+            "Export oxDNA",
+            f"Wrote:\n{topology_path or top_path}\n{configuration_path or conf_path}\n\n"
+            f"Use interaction_type = {'DNA2' if next(iter(self.project.bases.values())).molecule == 'DNA' else 'RNA'}.\n"
+            "Backbone positions are preserved; this is a coarse-grained initial configuration. "
+            "Inspect and relax it before production simulation.",
+            parent=self.root,
+        )
 
     def render_project(self) -> None:
         if not self.project:
@@ -5383,6 +5467,8 @@ def _apply_rotation_to_project(
     original_positions: dict[int, tuple[float, float, float]],
     center: tuple[float, float, float],
     rotation: tuple[tuple[float, float, float], tuple[float, float, float], tuple[float, float, float]],
+    *,
+    original_frames: dict | None = None,
 ) -> None:
     center_x, center_y, center_z = center
     for index, (x, y, z) in original_positions.items():
@@ -5396,10 +5482,9 @@ def _apply_rotation_to_project(
         base.x = center_x + rotated_x
         base.y = center_y + rotated_y
         base.z = center_z + rotated_z
-        if base.plane_u is not None:
-            base.plane_u = _apply_orientation(rotation, *base.plane_u)
-        if base.plane_v is not None:
-            base.plane_v = _apply_orientation(rotation, *base.plane_v)
+        plane_u, plane_v = original_frames[index] if original_frames is not None else (base.plane_u, base.plane_v)
+        base.plane_u = _apply_orientation(rotation, *plane_u) if plane_u is not None else None
+        base.plane_v = _apply_orientation(rotation, *plane_v) if plane_v is not None else None
 
 
 def _drag_translation_vector(

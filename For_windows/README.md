@@ -151,3 +151,10 @@ You can also start the viewer without an input file:
 ```bash
 python3 -m tiamat_py
 ```
+
+## Correctness Updates
+
+This folder includes the October 2026 save-safety, native archive, PDB, sequence
+generation and oxDNA fixes. Rebuild the executable to use them; an existing `.exe`
+is not automatically updated. Run `py -m unittest discover -s tests -v` to check
+the source. See [model assumptions and limitations](docs/validation.md).

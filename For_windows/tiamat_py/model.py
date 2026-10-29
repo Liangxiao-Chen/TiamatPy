@@ -1,13 +1,11 @@
 from __future__ import annotations
 
-from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 import colorsys
 import json
 import math
 import random
 import re
-import sys
 import time
 from typing import Any
 
@@ -74,7 +72,7 @@ class Base:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "Base":
         return cls(
-            index=int(data["index"]),
+            index=_as_int_or_none(data["index"]),
             object_id=str(data["object_id"]),
             x=float(data["x"]),
             y=float(data["y"]),
@@ -108,10 +106,40 @@ class TiamatProject:
     strands: list[Strand] = field(default_factory=list)
 
     def __post_init__(self) -> None:
+        self.validate()
         if not self.strands:
             self.refresh_strands()
 
+    def validate(self, *, check_pairs: bool = False) -> None:
+        """Reject malformed graphs before traversal, persistence or export."""
+        for index, base in self.bases.items():
+            if type(index) is not int or type(base.index) is not int or index != base.index:
+                raise ValueError(f"Invalid base ID: {index!r} (record ID {base.index!r}).")
+            if not all(math.isfinite(value) for value in base.position):
+                raise ValueError(f"Base {index} has non-finite coordinates.")
+            if base.molecule not in {"DNA", "RNA"}:
+                raise ValueError(f"Base {index} has unknown molecule type {base.molecule!r}.")
+            if base.nucleotide not in (*ALLOWED_BASES, None):
+                raise ValueError(f"Base {index} has invalid nucleotide {base.nucleotide!r}.")
+            for name, reciprocal in (("up", "down"), ("down", "up"), ("across", "across")):
+                neighbor = getattr(base, name)
+                if neighbor is None:
+                    continue
+                if type(neighbor) is not int or neighbor not in self.bases:
+                    raise ValueError(f"Base {index}.{name} refers to missing base {neighbor!r}.")
+                if neighbor == index:
+                    raise ValueError(f"Base {index}.{name} cannot refer to itself.")
+                if getattr(self.bases[neighbor], reciprocal) != index:
+                    raise ValueError(f"Base {index}.{name} -> {neighbor} is not reciprocal ({reciprocal}).")
+            if check_pairs and base.across is not None and not bases_can_pair(base, self.bases[base.across]):
+                raise ValueError(f"Bases {index} and {base.across} are not complementary.")
+            for name in ("plane_u", "plane_v"):
+                vector = getattr(base, name)
+                if vector is not None and (len(vector) != 3 or not all(math.isfinite(v) for v in vector)):
+                    raise ValueError(f"Base {index} has an invalid {name} frame.")
+
     def refresh_strands(self) -> None:
+        self.validate()
         self.strands = []
         components = self._strand_components()
         for strand_id, component in enumerate(components, start=1):
@@ -140,7 +168,12 @@ class TiamatProject:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "TiamatProject":
-        bases = {item["index"]: Base.from_dict(item) for item in data["bases"]}
+        bases = {}
+        for item in data["bases"]:
+            base = Base.from_dict(item)
+            if base.index in bases:
+                raise ValueError(f"Duplicate base ID: {base.index}.")
+            bases[base.index] = base
         return cls(bases=bases, metadata=dict(data.get("metadata", {})))
 
     def to_json(self) -> str:
@@ -421,7 +454,10 @@ class TiamatProject:
 
     def set_nucleotide(self, index: int, nucleotide: str | None) -> None:
         base = self.bases[index]
-        base.nucleotide = _normalize_base(nucleotide)
+        normalized = _normalize_base(nucleotide)
+        if normalized is not None and normalized not in _sequence_alphabet(base.molecule):
+            raise ValueError(f"{normalized} is not a valid base for {base.molecule}.")
+        base.nucleotide = normalized
         if base.across is None or base.across not in self.bases:
             return
         across = self.bases[base.across]
@@ -443,6 +479,8 @@ class TiamatProject:
     ) -> None:
         if not self.bases:
             return
+        if type(unique_sequence_limit) is not int or type(repetition_limit) is not int:
+            raise ValueError("Sequence limits must be integers.")
         if unique_sequence_limit < 4:
             raise ValueError("Unique Sequence Limit must be at least 4.")
         if repetition_limit < 2:
@@ -454,7 +492,10 @@ class TiamatProject:
         if timeout <= 0.0:
             raise ValueError("Operation Timeout must be greater than 0.")
 
-        previous = {index: base.nucleotide for index, base in self.bases.items()}
+        self.validate()
+        self.refresh_strands()
+        if not math.isfinite(timeout):
+            raise ValueError("Operation Timeout must be finite.")
         rng = random.Random(seed)
         deadline = time.monotonic() + timeout
         min_gc = max(0, math.ceil((gc_percentage - gc_tolerance) * len(self.bases)))
@@ -462,29 +503,9 @@ class TiamatProject:
         if min_gc > max_gc:
             raise ValueError("G/C Percentage and tolerance leave no valid GC range.")
 
-        try:
-            assignments = _try_periodic_sequence_assignments(
-                project=self,
-                rng=rng,
-                unique_limit=unique_sequence_limit,
-                repetition_limit=repetition_limit,
-                min_gc=min_gc,
-                max_gc=max_gc,
-            )
-            if assignments is None:
-                assignments = _generate_sequence_assignments(
-                    project=self,
-                    rng=rng,
-                    deadline=deadline,
-                    unique_limit=unique_sequence_limit,
-                    repetition_limit=repetition_limit,
-                    min_gc=min_gc,
-                    max_gc=max_gc,
-                )
-        except TimeoutError:
-            for index, nucleotide in previous.items():
-                self.bases[index].nucleotide = nucleotide
-            raise
+        from .sequence import generate_assignments
+        assignments = generate_assignments(self, rng, deadline, unique_sequence_limit,
+                                           repetition_limit, min_gc, max_gc)
 
         for index, base in self.bases.items():
             base.nucleotide = assignments[index]
@@ -569,13 +590,15 @@ class TiamatProject:
 
 
 def _as_int_or_none(value: Any) -> int | None:
-    if value in (None, "", 0, "0"):
+    if value in (None, ""):
         return None
+    if isinstance(value, bool) or (isinstance(value, float) and not value.is_integer()):
+        raise ValueError(f"Invalid base ID: {value!r}.")
     return int(value)
 
 
 def _normalize_base(value: Any) -> str | None:
-    if value in (None, "", "N"):
+    if value is None or str(value).strip().upper() in {"", "N"}:
         return None
     base = str(value).upper()
     base = FULL_NAME_TO_BASE.get(base.capitalize(), base)
@@ -612,12 +635,14 @@ def _normalize_color(value: Any) -> str | None:
 
 
 def _as_vector_or_none(value: Any) -> tuple[float, float, float] | None:
-    if not isinstance(value, (list, tuple)) or len(value) != 3:
+    if value is None:
         return None
+    if not isinstance(value, (list, tuple)) or len(value) != 3:
+        raise ValueError("Base-plane vectors must have three numeric components.")
     try:
         return (float(value[0]), float(value[1]), float(value[2]))
-    except (TypeError, ValueError):
-        return None
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Base-plane vectors must have three numeric components.") from exc
 
 
 def complement_for(base: str, target_molecule: str = "DNA") -> str:
@@ -659,482 +684,8 @@ def bases_can_pair(left: Base, right: Base) -> bool:
     return basepair_state(left, right) in {"canonical", "wobble", "undefined"}
 
 
-def _try_periodic_sequence_assignments(
-    project: TiamatProject,
-    rng: random.Random,
-    unique_limit: int,
-    repetition_limit: int,
-    min_gc: int,
-    max_gc: int,
-) -> dict[int, str] | None:
-    if 2 * len(project.bases) < 4 * min_gc or 2 * len(project.bases) > 4 * max_gc:
-        return None
-
-    base_to_location = {
-        base_index: (strand.strand_id, position)
-        for strand in project.strands
-        for position, base_index in enumerate(strand.base_indices)
-    }
-    pair_constraints: dict[int, dict[int, list[tuple[int, int]]]] = {strand.strand_id: {} for strand in project.strands}
-    for index, base in project.bases.items():
-        across = base.across
-        if across is None or across not in project.bases or index > across:
-            continue
-        left_strand, left_pos = base_to_location[index]
-        right_strand, right_pos = base_to_location[across]
-        pair_constraints[left_strand].setdefault(right_strand, []).append((left_pos, right_pos))
-        pair_constraints[right_strand].setdefault(left_strand, []).append((right_pos, left_pos))
-
-    cycle_families = [
-        {
-            "DNA": ("A", "C", "T", "G"),
-            "RNA": ("A", "C", "U", "G"),
-        },
-        {
-            "DNA": ("A", "G", "T", "C"),
-            "RNA": ("A", "G", "U", "C"),
-        },
-    ]
-    order = list(cycle_families)
-    rng.shuffle(order)
-    strand_ids = [strand.strand_id for strand in project.strands]
-    components = _connected_strand_components(strand_ids, pair_constraints)
-
-    for family in order:
-        states: dict[int, tuple[int, int]] = {}
-        valid = True
-        randomized_components = list(components)
-        rng.shuffle(randomized_components)
-        for component in randomized_components:
-            if not _solve_periodic_component(component, pair_constraints, states, rng):
-                valid = False
-                break
-        if not valid:
-            continue
-
-        assignments: dict[int, str] = {}
-        for strand in project.strands:
-            sign, offset = states[strand.strand_id]
-            for position, base_index in enumerate(strand.base_indices):
-                molecule = str(project.bases[base_index].molecule).upper()
-                cycle = family["RNA"] if molecule == "RNA" else family["DNA"]
-                assignments[base_index] = cycle[(offset + sign * position) % 4]
-
-        gc_count = sum(1 for nucleotide in assignments.values() if nucleotide in {"G", "C"})
-        if not (min_gc <= gc_count <= max_gc):
-            continue
-        if not _assignments_respect_pairs(project, assignments):
-            continue
-        if not _assignments_respect_sequence_constraints(project, assignments, unique_limit, repetition_limit):
-            continue
-        return assignments
-    return None
-
-
-def _generate_sequence_assignments(
-    project: TiamatProject,
-    rng: random.Random,
-    deadline: float,
-    unique_limit: int,
-    repetition_limit: int,
-    min_gc: int,
-    max_gc: int,
-) -> dict[int, str]:
-    strand_order = [strand.strand_id for strand in sorted(project.strands, key=lambda strand: (-len(strand.base_indices), strand.strand_id))]
-    strands_by_id = {strand.strand_id: strand for strand in project.strands}
-    strand_sequences = {strand.strand_id: [None] * len(strand.base_indices) for strand in project.strands}
-    strand_required = {
-        strand.strand_id: set(_sequence_alphabet(str(project.bases[strand.base_indices[0]].molecule).upper()))
-        for strand in project.strands
-        if strand.base_indices
-    }
-    strand_positions = {strand.strand_id: 0 for strand in project.strands}
-    base_to_location = {
-        base_index: (strand.strand_id, position)
-        for strand in project.strands
-        for position, base_index in enumerate(strand.base_indices)
-    }
-    assignments: dict[int, str] = {}
-    total_bases = len(project.bases)
-
-    sys.setrecursionlimit(max(sys.getrecursionlimit(), total_bases * 2 + 1000))
-
-    def propagate_frontiers() -> bool:
-        for strand_id in strand_order:
-            sequence = strand_sequences[strand_id]
-            frontier = strand_positions[strand_id]
-            while frontier < len(sequence) and sequence[frontier] is not None:
-                if not _position_constraints_ok(
-                    sequence=sequence,
-                    position=frontier,
-                    required_bases=strand_required[strand_id],
-                    unique_limit=unique_limit,
-                    repetition_limit=repetition_limit,
-                ):
-                    return False
-                frontier += 1
-            strand_positions[strand_id] = frontier
-        return True
-
-    def choose_next_step(gc_count: int) -> tuple[int, list[tuple[tuple[float, float, float], dict[int, str], int]]] | None:
-        chosen: tuple[int, list[tuple[tuple[float, float, float], dict[int, str], int]]] | None = None
-        chosen_metric: tuple[int, int] | None = None
-        assigned_count = len(assignments)
-        for strand_id in strand_order:
-            frontier = strand_positions[strand_id]
-            sequence = strand_sequences[strand_id]
-            if frontier >= len(sequence):
-                continue
-            strand = strands_by_id[strand_id]
-            base_index = strand.base_indices[frontier]
-            candidates = _candidate_infos_for_frontier(
-                project=project,
-                base_index=base_index,
-                assignments=assignments,
-                strand_sequences=strand_sequences,
-                strand_required=strand_required,
-                base_to_location=base_to_location,
-                current_gc=gc_count,
-                assigned_count=assigned_count,
-                total_bases=total_bases,
-                min_gc=min_gc,
-                max_gc=max_gc,
-                unique_limit=unique_limit,
-                repetition_limit=repetition_limit,
-                rng=rng,
-            )
-            if not candidates:
-                return None
-            metric = (len(candidates), -(len(sequence) - frontier))
-            if chosen is None or metric < chosen_metric:
-                chosen = (strand_id, candidates)
-                chosen_metric = metric
-                if len(candidates) == 1:
-                    break
-        return chosen
-
-    def backtrack(gc_count: int) -> bool:
-        if time.monotonic() >= deadline:
-            raise TimeoutError("Could not generate sequences that satisfy the current limits within the timeout.")
-        saved_frontiers = dict(strand_positions)
-        if not propagate_frontiers():
-            strand_positions.update(saved_frontiers)
-            return False
-        if all(strand_positions[strand_id] >= len(strand_sequences[strand_id]) for strand_id in strand_order):
-            if min_gc <= gc_count <= max_gc and _assignments_respect_pairs(project, assignments):
-                return True
-            strand_positions.update(saved_frontiers)
-            return False
-
-        step = choose_next_step(gc_count)
-        if step is None:
-            strand_positions.update(saved_frontiers)
-            return False
-        _strand_id, candidates = step
-        for _score, changes, new_gc in candidates:
-            changed_locations: list[tuple[int, int, int]] = []
-            for changed_index, nucleotide in changes.items():
-                assignments[changed_index] = nucleotide
-                target_strand_id, target_position = base_to_location[changed_index]
-                strand_sequences[target_strand_id][target_position] = nucleotide
-                changed_locations.append((changed_index, target_strand_id, target_position))
-            if backtrack(new_gc):
-                return True
-            for changed_index, target_strand_id, target_position in reversed(changed_locations):
-                assignments.pop(changed_index, None)
-                strand_sequences[target_strand_id][target_position] = None
-            strand_positions.update(saved_frontiers)
-        strand_positions.update(saved_frontiers)
-        return False
-
-    if backtrack(0):
-        return assignments
-    raise TimeoutError("Could not generate sequences that satisfy the current limits within the timeout.")
-
-
-def _candidate_infos_for_frontier(
-    project: TiamatProject,
-    base_index: int,
-    assignments: dict[int, str],
-    strand_sequences: dict[int, list[str | None]],
-    strand_required: dict[int, set[str]],
-    base_to_location: dict[int, tuple[int, int]],
-    current_gc: int,
-    assigned_count: int,
-    total_bases: int,
-    min_gc: int,
-    max_gc: int,
-    unique_limit: int,
-    repetition_limit: int,
-    rng: random.Random,
-) -> list[tuple[tuple[float, float, float], dict[int, str], int]]:
-    base = project.bases[base_index]
-    candidates = list(_sequence_alphabet(base.molecule))
-    rng.shuffle(candidates)
-    results: list[tuple[tuple[float, float, float], dict[int, str], int]] = []
-    strand_id, position = base_to_location[base_index]
-    sequence = strand_sequences[strand_id]
-
-    for candidate in candidates:
-        changes = _assignment_changes_for_candidate(project, base_index, candidate, assignments)
-        if changes is None:
-            continue
-        added_gc = sum(1 for nucleotide in changes.values() if nucleotide in {"G", "C"})
-        new_assigned_count = assigned_count + len(changes)
-        remaining = total_bases - new_assigned_count
-        new_gc = current_gc + added_gc
-        if new_gc > max_gc or new_gc + remaining < min_gc:
-            continue
-
-        original = sequence[position]
-        sequence[position] = candidate
-        current_ok = _position_constraints_ok(
-            sequence=sequence,
-            position=position,
-            required_bases=strand_required[strand_id],
-            unique_limit=unique_limit,
-            repetition_limit=repetition_limit,
-        )
-        sequence[position] = original
-        if not current_ok:
-            continue
-
-        gc_target = (min_gc + max_gc) / 2.0
-        gc_error = abs(gc_target - new_gc)
-        results.append(
-            (
-                (gc_error, float(len(changes) > 1), rng.random()),
-                changes,
-                new_gc,
-            )
-        )
-
-    results.sort(key=lambda item: item[0])
-    return results
-
-
-def _assignment_changes_for_candidate(
-    project: TiamatProject,
-    base_index: int,
-    candidate: str,
-    assignments: dict[int, str],
-) -> dict[int, str] | None:
-    base = project.bases[base_index]
-    changes: dict[int, str] = {}
-    existing = assignments.get(base_index)
-    if existing is not None and existing != candidate:
-        return None
-    if existing is None:
-        changes[base_index] = candidate
-
-    across_index = base.across
-    if across_index is None or across_index not in project.bases:
-        return changes
-
-    across = project.bases[across_index]
-    complement = complement_for(candidate, across.molecule)
-    across_existing = assignments.get(across_index)
-    if across_existing is not None and across_existing != complement:
-        return None
-    if across_existing is None:
-        changes[across_index] = complement
-    return changes
-
-
-def _assignments_respect_pairs(project: TiamatProject, assignments: dict[int, str]) -> bool:
-    for index, base in project.bases.items():
-        nucleotide = assignments.get(index)
-        if nucleotide is None:
-            return False
-        if base.across is None or base.across not in project.bases:
-            continue
-        across = project.bases[base.across]
-        across_nucleotide = assignments.get(base.across)
-        if across_nucleotide is None:
-            return False
-        if across_nucleotide != complement_for(nucleotide, across.molecule):
-            return False
-    return True
-
-
-def _connected_strand_components(
-    strand_ids: list[int],
-    pair_constraints: dict[int, dict[int, list[tuple[int, int]]]],
-) -> list[set[int]]:
-    remaining = set(strand_ids)
-    components: list[set[int]] = []
-    while remaining:
-        start = remaining.pop()
-        component = {start}
-        stack = [start]
-        while stack:
-            current = stack.pop()
-            for neighbor in pair_constraints.get(current, {}):
-                if neighbor in component:
-                    continue
-                component.add(neighbor)
-                remaining.discard(neighbor)
-                stack.append(neighbor)
-        components.append(component)
-    return components
-
-
-def _solve_periodic_component(
-    component: set[int],
-    pair_constraints: dict[int, dict[int, list[tuple[int, int]]]],
-    states: dict[int, tuple[int, int]],
-    rng: random.Random,
-) -> bool:
-    local_states = {strand_id: states[strand_id] for strand_id in component if strand_id in states}
-    if not local_states:
-        root = next(iter(component))
-        root_states = [(sign, offset) for sign in (1, 3) for offset in range(4)]
-        rng.shuffle(root_states)
-        for state in root_states:
-            local_states[root] = state
-            if _backtrack_periodic_component(component, pair_constraints, local_states, rng):
-                states.update(local_states)
-                return True
-            local_states.pop(root, None)
-        return False
-    if _backtrack_periodic_component(component, pair_constraints, local_states, rng):
-        states.update(local_states)
-        return True
-    return False
-
-
-def _backtrack_periodic_component(
-    component: set[int],
-    pair_constraints: dict[int, dict[int, list[tuple[int, int]]]],
-    states: dict[int, tuple[int, int]],
-    rng: random.Random,
-) -> bool:
-    if len(states) == len(component):
-        return True
-
-    choice: tuple[int, list[tuple[int, int]]] | None = None
-    choice_metric: tuple[int, int, int] | None = None
-    for strand_id in component:
-        if strand_id in states:
-            continue
-        options: set[tuple[int, int]] | None = None
-        constrained_neighbors = 0
-        for neighbor, constraints in pair_constraints.get(strand_id, {}).items():
-            if neighbor not in states:
-                continue
-            constrained_neighbors += 1
-            neighbor_options = _neighbor_state_options(states[neighbor], pair_constraints[neighbor][strand_id])
-            options = neighbor_options if options is None else options & neighbor_options
-        if options is None:
-            options = {(sign, offset) for sign in (1, 3) for offset in range(4)}
-        if not options:
-            return False
-        ordered = list(options)
-        rng.shuffle(ordered)
-        metric = (len(ordered), -constrained_neighbors, strand_id)
-        if choice is None or choice_metric is None or metric < choice_metric:
-            choice = (strand_id, ordered)
-            choice_metric = metric
-
-    if choice is None:
-        return False
-    strand_id, options = choice
-    for option in options:
-        states[strand_id] = option
-        if _backtrack_periodic_component(component, pair_constraints, states, rng):
-            return True
-        states.pop(strand_id, None)
-    return False
-
-
-def _neighbor_state_options(
-    source_state: tuple[int, int],
-    constraints: list[tuple[int, int]],
-) -> set[tuple[int, int]]:
-    source_sign, source_offset = source_state
-    options: set[tuple[int, int]] = set()
-    first_source_pos, first_target_pos = constraints[0]
-    for target_sign in (1, 3):
-        target_offset = (source_offset + source_sign * first_source_pos + 2 - target_sign * first_target_pos) % 4
-        if all(
-            (target_offset + target_sign * target_pos - source_offset - source_sign * source_pos - 2) % 4 == 0
-            for source_pos, target_pos in constraints
-        ):
-            options.add((target_sign, target_offset))
-    return options
-
-
-def _assignments_respect_sequence_constraints(
-    project: TiamatProject,
-    assignments: dict[int, str],
-    unique_limit: int,
-    repetition_limit: int,
-) -> bool:
-    for strand in project.strands:
-        sequence = [assignments[index] for index in strand.base_indices]
-        required_bases = set(_sequence_alphabet(str(project.bases[strand.base_indices[0]].molecule).upper()))
-        if not _repetition_limit_ok(sequence, repetition_limit):
-            return False
-        if not _unique_window_ok(sequence, unique_limit, required_bases):
-            return False
-    return True
-
-
-def _position_constraints_ok(
-    sequence: list[str | None],
-    position: int,
-    required_bases: set[str],
-    unique_limit: int,
-    repetition_limit: int,
-) -> bool:
-    current = sequence[position]
-    if current is None:
-        return False
-    run_length = 1
-    cursor = position - 1
-    while cursor >= 0 and sequence[cursor] == current:
-        run_length += 1
-        if run_length >= repetition_limit:
-            return False
-        cursor -= 1
-    if unique_limit > 0 and position + 1 >= unique_limit:
-        window = sequence[position - unique_limit + 1 : position + 1]
-        if any(base is None for base in window):
-            return False
-        if not required_bases.issubset(set(window)):
-            return False
-    return True
-
-
-def _repetition_limit_ok(sequence: list[str], repetition_limit: int) -> bool:
-    if repetition_limit <= 1:
-        return False
-    run_length = 1
-    for previous, current in zip(sequence, sequence[1:]):
-        if current == previous:
-            run_length += 1
-            if run_length >= repetition_limit:
-                return False
-        else:
-            run_length = 1
-    return True
-
-
-def _unique_window_ok(sequence: list[str], unique_limit: int, required_bases: set[str]) -> bool:
-    if unique_limit <= 0 or len(sequence) < unique_limit:
-        return True
-    for start in range(0, len(sequence) - unique_limit + 1):
-        if not required_bases.issubset(set(sequence[start : start + unique_limit])):
-            return False
-    return True
-
-
 def _sequence_alphabet(molecule: str) -> tuple[str, ...]:
     return ("A", "U", "C", "G") if str(molecule).upper() == "RNA" else ("A", "T", "C", "G")
-
-
-def _strand_position_lookup(strand: Strand) -> dict[int, int]:
-    return {index: position for position, index in enumerate(strand.base_indices)}
 
 
 def _strand_color(strand_id: int) -> str:
@@ -1204,14 +755,3 @@ def _sticky_end_sequences_match(
         if not bases_can_pair(project.bases[left_index], project.bases[right_index]):
             return False
     return True
-
-
-def _choose_nucleotide(history: list[str], usage: Counter[str], rng: random.Random, molecule: str = "DNA") -> str:
-    candidates = ["A", "C", "G", "U"] if str(molecule).upper() == "RNA" else ["A", "C", "G", "T"]
-    if len(history) >= 2 and history[-1] == history[-2] and history[-1] in candidates:
-        candidates.remove(history[-1])
-    weights = defaultdict(list)
-    for candidate in candidates:
-        weights[usage[candidate]].append(candidate)
-    lowest = min(weights)
-    return rng.choice(weights[lowest])

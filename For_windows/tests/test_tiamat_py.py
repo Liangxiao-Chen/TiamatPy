@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import re
 import tempfile
 import unittest
@@ -10,6 +11,7 @@ from pathlib import Path
 from tiamat_py.io_json import load_json_project
 from tiamat_py.io_ascii import parse_ascii_dat
 from tiamat_py.io_dna import load_dna_project, parse_dna_records
+from tiamat_py.io_oxdna import export_oxdna_files, resolve_oxdna_output_paths
 from tiamat_py.model import Base, TiamatProject
 from tiamat_py.io_pdb import convert_pdb_to_dna_files, load_pdb_sugar_center_project
 from tiamat_py.model import basepair_state
@@ -79,15 +81,16 @@ SAMPLE_DAT = """\
 4 DDDD CCCC 00000000 BBBB 1.0 1.0 0.0
 """
 
-SAMPLE_DNA_PATH = Path("/Users/wyssuser/Desktop/Tiamat2_design/SSCCH/Ludlum_v0/14_33/ludlum_14_33.dna")
-SAMPLE_DNAJSON_PATH = Path("/Users/wyssuser/Desktop/Tiamat2_design/SSCCH/Ludlum_v0/14_33/output.dnajson")
-SAMPLE_DNA_PATH_VARIANT = Path("/Users/wyssuser/Desktop/Tiamat2_design/test.dna")
-SAMPLE_DNAJSON_PATH_VARIANT = Path("/Users/wyssuser/Desktop/Tiamat2_design/test.dnajson")
-SAMPLE_DNA_PATH_STANDALONE = Path("/Users/wyssuser/Desktop/Tiamat2_design/test.dna")
-SAMPLE_DNAJSON_PATH_STANDALONE = Path("/Users/wyssuser/Desktop/Tiamat2_design/test.dnajson")
-SAMPLE_RNA_DNA_PATH = Path("/Users/wyssuser/Desktop/Tiamat2_design/RNA_crisscross/V4_6565/V4_6565.dna")
-SAMPLE_RNA_DNAJSON_PATH = Path("/Users/wyssuser/Desktop/Tiamat2_design/RNA_crisscross/V4_6565/V4_6565.dnajson")
-SAMPLE_PDB_PATH = Path("/Users/wyssuser/Desktop/Tiamat2_design/ChemeraX_model/DNA.pdb")
+SAMPLE_ROOT = Path(os.environ.get("TIAMAT_SAMPLE_DIR", Path.home() / "Desktop/Tiamat2_design"))
+SAMPLE_DNA_PATH = SAMPLE_ROOT / "SSCCH/Ludlum_v0/14_33/ludlum_14_33.dna"
+SAMPLE_DNAJSON_PATH = SAMPLE_ROOT / "SSCCH/Ludlum_v0/14_33/output.dnajson"
+SAMPLE_DNA_PATH_VARIANT = SAMPLE_ROOT / "test.dna"
+SAMPLE_DNAJSON_PATH_VARIANT = SAMPLE_ROOT / "test.dnajson"
+SAMPLE_DNA_PATH_STANDALONE = SAMPLE_ROOT / "test.dna"
+SAMPLE_DNAJSON_PATH_STANDALONE = SAMPLE_ROOT / "test.dnajson"
+SAMPLE_RNA_DNA_PATH = SAMPLE_ROOT / "RNA_crisscross/V4_6565/V4_6565.dna"
+SAMPLE_RNA_DNAJSON_PATH = SAMPLE_ROOT / "RNA_crisscross/V4_6565/V4_6565.dnajson"
+SAMPLE_PDB_PATH = SAMPLE_ROOT / "ChemeraX_model/DNA.pdb"
 
 
 class TiamatPyTests(unittest.TestCase):
@@ -188,6 +191,44 @@ class TiamatPyTests(unittest.TestCase):
         self.assertEqual(project.bases[2].nucleotide, "U")
         self.assertEqual(basepair_state(project.bases[1], project.bases[2]), "wobble")
         self.assertEqual(_basepair_dash(project, 1, 2), (4, 2))
+
+    def test_export_oxdna_writes_topology_and_configuration_files(self) -> None:
+        project = TiamatProject(
+            bases={
+                1: Base(index=1, object_id="1", x=0.0, y=0.0, z=0.0, molecule="DNA", up=2, down=None, across=4, nucleotide="T"),
+                2: Base(index=2, object_id="2", x=0.6, y=0.0, z=0.0, molecule="DNA", up=None, down=1, across=3, nucleotide="A"),
+                3: Base(index=3, object_id="3", x=0.6, y=1.8, z=0.0, molecule="DNA", up=4, down=None, across=2, nucleotide="T"),
+                4: Base(index=4, object_id="4", x=0.0, y=1.8, z=0.0, molecule="DNA", up=None, down=3, across=1, nucleotide="A"),
+            }
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            top_path, conf_path = export_oxdna_files(project, Path(tmpdir) / "sample")
+            self.assertEqual(top_path, Path(tmpdir) / "sample.top")
+            self.assertEqual(conf_path, Path(tmpdir) / "sample.oxdna")
+            top_lines = top_path.read_text(encoding="utf-8").splitlines()
+            conf_lines = conf_path.read_text(encoding="utf-8").splitlines()
+            self.assertEqual(top_lines[0], "4 2")
+            self.assertEqual(len(top_lines), 5)
+            self.assertEqual(len(conf_lines), 7)
+            self.assertRegex(top_lines[1], r"^1 [ACGT] ")
+
+    def test_export_oxdna_rejects_mixed_molecule_projects(self) -> None:
+        project = TiamatProject(
+            bases={
+                1: Base(index=1, object_id="1", x=0.0, y=0.0, z=0.0, molecule="DNA", nucleotide="A"),
+                2: Base(index=2, object_id="2", x=1.0, y=0.0, z=0.0, molecule="RNA", nucleotide="U"),
+            }
+        )
+        with self.assertRaisesRegex(ValueError, "all-DNA or all-RNA"):
+            export_oxdna_files(project, "mixed_export")
+
+    def test_resolve_oxdna_output_paths_accepts_top_or_oxdna_inputs(self) -> None:
+        top_path, conf_path = resolve_oxdna_output_paths("demo.top")
+        self.assertEqual(str(top_path), "demo.top")
+        self.assertEqual(str(conf_path), "demo.oxdna")
+        top_path, conf_path = resolve_oxdna_output_paths("demo.oxdna")
+        self.assertEqual(str(top_path), "demo.top")
+        self.assertEqual(str(conf_path), "demo.oxdna")
 
     def test_create_and_delete_complementary_follow_selection_rules(self) -> None:
         project = TiamatProject(
@@ -904,6 +945,8 @@ class TiamatPyTests(unittest.TestCase):
         self.assertEqual(project.bases[1].molecule, "RNA")
 
     def test_pdb_sugar_center_loader_builds_expected_duplex(self) -> None:
+        if not SAMPLE_PDB_PATH.exists():
+            self.skipTest("optional local PDB fixture is not available")
         project = load_pdb_sugar_center_project(SAMPLE_PDB_PATH)
         summary = project.summary()
         self.assertEqual(summary["bases"], 92)
@@ -915,11 +958,15 @@ class TiamatPyTests(unittest.TestCase):
         self.assertAlmostEqual(project.bases[1].z, 1.46572, places=4)
 
     def test_viewer_loader_accepts_pdb_files(self) -> None:
+        if not SAMPLE_PDB_PATH.exists():
+            self.skipTest("optional local PDB fixture is not available")
         project = load_project(SAMPLE_PDB_PATH)
         self.assertEqual(project.summary()["bases"], 92)
         self.assertEqual(project.bases[1].molecule, "DNA")
 
     def test_pdb_converter_writes_minimal_dna_that_round_trips(self) -> None:
+        if not SAMPLE_PDB_PATH.exists():
+            self.skipTest("optional local PDB fixture is not available")
         with tempfile.TemporaryDirectory() as tmpdir:
             dna_path = Path(tmpdir) / "dna_from_pdb.dna"
             _project, output_path, sidecar_path = convert_pdb_to_dna_files(SAMPLE_PDB_PATH, dna_path=dna_path)
@@ -1108,7 +1155,8 @@ class TiamatPyTests(unittest.TestCase):
         sidecar = load_json_project(SAMPLE_DNAJSON_PATH)
         self.assertEqual(project.summary(), sidecar.summary())
         self.assertEqual(project.metadata.get("source_format"), "dna")
-        self.assertEqual(project.metadata.get("dna_sidecar_path"), str(SAMPLE_DNAJSON_PATH))
+        self.assertIsNone(project.metadata.get("dna_sidecar_path"))
+        self.assertEqual(project.metadata.get("dna_topology"), "archive_references")
 
     def test_dna_binary_loads_generic_rna_variant(self) -> None:
         if not SAMPLE_DNA_PATH_VARIANT.exists() or not SAMPLE_DNAJSON_PATH_VARIANT.exists():
@@ -1123,7 +1171,7 @@ class TiamatPyTests(unittest.TestCase):
         self.assertEqual(project.summary(), sidecar.summary())
         self.assertEqual(project.metadata.get("dna_record_count"), len(records))
         self.assertEqual(project.metadata.get("source_format"), "dna")
-        self.assertEqual(project.metadata.get("dna_sidecar_path"), str(SAMPLE_DNAJSON_PATH_VARIANT))
+        self.assertIsNone(project.metadata.get("dna_sidecar_path"))
 
     def test_dna_binary_standalone_fallback_matches_record_order_topology(self) -> None:
         if not SAMPLE_DNA_PATH_STANDALONE.exists() or not SAMPLE_DNAJSON_PATH_STANDALONE.exists():
@@ -1136,7 +1184,7 @@ class TiamatPyTests(unittest.TestCase):
             project = load_dna_project(isolated_dna)
 
         self.assertEqual(project.summary(), sidecar.summary())
-        self.assertEqual(project.metadata.get("dna_topology"), "record_order_fallback")
+        self.assertEqual(project.metadata.get("dna_topology"), "archive_references")
         self.assertIsNone(project.metadata.get("dna_sidecar_path"))
         coordinate_map = {}
         unmatched = dict(sidecar.bases)
@@ -1182,7 +1230,7 @@ class TiamatPyTests(unittest.TestCase):
         self.assertEqual(records[0].nucleotide, "U")
         self.assertEqual(records[0].molecule, "RNA")
         self.assertEqual(project.summary(), sidecar.summary())
-        self.assertEqual(project.metadata.get("dna_sidecar_path"), str(SAMPLE_RNA_DNAJSON_PATH))
+        self.assertIsNone(project.metadata.get("dna_sidecar_path"))
 
 
 if __name__ == "__main__":
